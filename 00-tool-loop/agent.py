@@ -110,6 +110,7 @@ while step < 15:
     if not calls:
         print(interaction.output_text)
         print(f"총 스텝: {step}")
+        tokens += interaction.usage.total_tokens
         print(f"총 토큰 사용량: {tokens}")
         break
     results = []
@@ -125,7 +126,7 @@ while step < 15:
             "result": [{"type": "text", "text": json.dumps(result)}]
         })
         print(f"STEP {step} / {c.name} {c.id} / {result[:200]}")  # Print first 200 characters of the result
-        tokens += interaction.usage.total_input_tokens
+    tokens += interaction.usage.total_tokens 
     interaction = client.interactions.create(
         model="gemini-3.6-flash",
         previous_interaction_id=interaction.id,
