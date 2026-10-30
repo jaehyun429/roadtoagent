@@ -1,0 +1,51 @@
+STEP 1 / read_file call_937321 / weights,reps,week
+100,10,1
+200,20,1
+300,30,1
+400,40,1
+500,50,1
+100,10,2
+200,20,2
+300,30,2
+400,40,2
+500,50,2
+100,10,3
+200,20,3
+300,30,3
+400,40,3
+500,50,3
+100,10,4
+200,20,4
+300,30,4
+400,40,4
+500,50,4
+STEP 2 / run_python call_987549 / weights    int64
+reps       int64
+week       int64
+dtype: object
+weights    300.0
+reps        30.0
+week         2.5
+dtype: float64
+
+saved:result.md
+STEP 3 / write_file call_1082490 / saved:result.md
+STEP 4 / read_file call_4195489 / # 숫자 컬럼별 평균 계산 결과
+
+| 컬럼명 | 평균값 |
+| --- | --- |
+| weights | 300.0 |
+| reps | 30.0 |
+| week | 2.5 |
+
+`data/sample.csv` 파일의 숫자 컬럼별 평균을 계산하여 `result.md` 파일에 마크다운 표 형태로 저장하였습니다.
+
+### 계산 결과 요약
+
+| 컬럼명 | 평균값 |
+| --- | --- |
+| weights | 300.0 |
+| reps | 30.0 |
+| week | 2.5 |
+총 스텝: 5
+총 토큰 사용량: 2340
