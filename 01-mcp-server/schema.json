@@ -1,32 +1,55 @@
 [
   {
     "name": "list_courses",
-    "description": "수강 가능한 과목 목록을 돌려준다.\n\nkeyword가 있으면 과목명에 그 문자열이 포함된 과목만 돌려준다.\n결과는 최대 20건이며, 더 있으면 truncated=true와 전체 건수(total)가 함께 온다.",
+    "description": "수강 중인 과목 목록을 돌려준다. 과목명은 다른 도구의 course 인자에 그대로 쓴다.",
     "inputSchema": {
       "additionalProperties": false,
-      "properties": {
-        "keyword": {
-          "default": "",
-          "description": "과목명에 포함될 문자열. 비우면 전체 목록",
-          "type": "string"
-        }
-      },
+      "properties": {},
       "type": "object"
     }
   },
   {
-    "name": "get_course",
-    "description": "과목명 부분일치로 과목 상세 1건을 돌려준다.\n\n여러 개가 걸리면 첫 번째를 돌려주고 candidates에 나머지 이름을 담아준다.\n없으면 COURSE_NOT_FOUND. list_courses로 정확한 이름을 먼저 확인하면 좋다.",
+    "name": "get_assignments",
+    "description": "특정 과목의 과제 목록을 돌려준다.",
     "inputSchema": {
       "additionalProperties": false,
       "properties": {
-        "name": {
+        "course": {
           "description": "과목명 일부 또는 전체 (부분일치)",
           "type": "string"
+        },
+        "only_pending": {
+          "default": false,
+          "description": "true면 미제출 과제만",
+          "type": "boolean"
         }
       },
       "required": [
-        "name"
+        "course"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "name": "get_notices",
+    "description": "특정 과목의 최근 공지를 최신순으로 돌려준다.",
+    "inputSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "course": {
+          "description": "과목명 일부 또는 전체 (부분일치)",
+          "type": "string"
+        },
+        "limit": {
+          "default": 10,
+          "description": "가져올 공지 수 (최대 20)",
+          "maximum": 20,
+          "minimum": 1,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "course"
       ],
       "type": "object"
     }

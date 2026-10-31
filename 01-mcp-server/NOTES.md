@@ -4,8 +4,10 @@
 
 ### F1. 도구
 
-- `list_courses(keyword="")` — 과목 목록. keyword 있으면 과목명 부분일치 필터.
-- `get_course(name)` — 과목명 부분일치로 상세 1건. 여러 건이면 첫 건 + `candidates`.
+- `list_courses()` — 수강 중인 과목 목록.
+- `get_assignments(course, only_pending=False)` — 과목명 부분일치, 과제 목록. only_pending이면 미제출만.
+- `get_notices(course, limit=10)` — 과목명 부분일치, 최근 공지 limit건 (최대 20).
+- 과목명이 안 맞으면 COURSE_NOT_FOUND → list_courses로 유도.
 - 캐시 인자 없음. `clear_cache` 없음. 캐시는 서버 내부 TTL(300초)로만.
 
 ### F2. 응답
