@@ -1,0 +1,34 @@
+[
+  {
+    "name": "list_courses",
+    "description": "수강 가능한 과목 목록을 돌려준다.\n\nkeyword가 있으면 과목명에 그 문자열이 포함된 과목만 돌려준다.\n결과는 최대 20건이며, 더 있으면 truncated=true와 전체 건수(total)가 함께 온다.",
+    "inputSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "keyword": {
+          "default": "",
+          "description": "과목명에 포함될 문자열. 비우면 전체 목록",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    }
+  },
+  {
+    "name": "get_course",
+    "description": "과목명 부분일치로 과목 상세 1건을 돌려준다.\n\n여러 개가 걸리면 첫 번째를 돌려주고 candidates에 나머지 이름을 담아준다.\n없으면 COURSE_NOT_FOUND. list_courses로 정확한 이름을 먼저 확인하면 좋다.",
+    "inputSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "description": "과목명 일부 또는 전체 (부분일치)",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "type": "object"
+    }
+  }
+]
