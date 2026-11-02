@@ -1,7 +1,7 @@
 [
   {
     "name": "list_courses",
-    "description": "수강 중인 과목 목록을 돌려준다. 과목명은 다른 도구의 course 인자에 그대로 쓴다.",
+    "description": "이번 학기 수강 과목 목록을 돌려준다. 과목명은 다른 도구의 course 인자에 그대로 쓴다.",
     "inputSchema": {
       "additionalProperties": false,
       "properties": {},
@@ -10,7 +10,7 @@
   },
   {
     "name": "get_assignments",
-    "description": "특정 과목의 과제 목록을 돌려준다.",
+    "description": "특정 과목의 과제 목록을 돌려준다. 과제 본문은 포함하지 않는다.",
     "inputSchema": {
       "additionalProperties": false,
       "properties": {
@@ -20,7 +20,7 @@
         },
         "only_pending": {
           "default": false,
-          "description": "true면 미제출 과제만",
+          "description": "true면 아직 마감 안 된 미제출 과제만",
           "type": "boolean"
         }
       },
@@ -32,7 +32,7 @@
   },
   {
     "name": "get_notices",
-    "description": "특정 과목의 최근 공지를 최신순으로 돌려준다.",
+    "description": "특정 과목의 최근 공지 목록을 돌려준다. 본문은 포함하지 않는다.",
     "inputSchema": {
       "additionalProperties": false,
       "properties": {

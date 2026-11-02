@@ -17,3 +17,6 @@ env/
 .DS_Store
 .vscode/
 .idea/
+
+# 사이버캠퍼스 응답 샘플 (개인정보 포함)
+01-mcp-server/samples/
