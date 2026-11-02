@@ -1,0 +1,101 @@
+# HTTP(streamable) 호출 로그  2026-11-02 21:58
+# 서버: uv run server.py --http   (http://127.0.0.1:8000/mcp)   클라이언트: curl
+
+## 1. initialize
+$ curl -i -X POST http://127.0.0.1:8000/mcp -H 'Content-Type: application/json' -H 'Accept: application/json, text/event-stream' -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"curl","version":"0"}}}'
+    HTTP/1.1 200 OK
+    date: Mon, 02 Nov 2026 12:58:40 GMT
+    server: uvicorn
+    cache-control: no-cache, no-transform
+    connection: keep-alive
+    content-type: text/event-stream
+    mcp-session-id: fbd4af72d0404fe89881c0dc78f01cae
+    x-accel-buffering: no
+    Transfer-Encoding: chunked
+    
+    event: message
+    data: {"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2025-03-26","capabilities":{"logging":{},"prompts":{"listChanged":true},"resources":{"subscribe":false,"listChanged":true},"tools":{"listChanged":true}},"serverInfo":{"name":"cybercampus","version":"4.1.4"}}}
+    
+
+## 2. notifications/initialized   (이후 요청은 1번 응답의 mcp-session-id 헤더를 같이 보낸다)
+$ curl -X POST http://127.0.0.1:8000/mcp ... -H 'mcp-session-id: $SID' -d '{"jsonrpc":"2.0","method":"notifications/initialized"}'
+    HTTP/1.1 202 Accepted
+
+## 3. tools/list
+$ curl -X POST http://127.0.0.1:8000/mcp ... -H 'mcp-session-id: $SID' -d '{"jsonrpc":"2.0","id":2,"method":"tools/list"}'
+    tools: ['list_courses', 'get_assignments', 'get_notices']
+
+## 4. tools/call list_courses
+$ curl -X POST http://127.0.0.1:8000/mcp ... -H 'mcp-session-id: $SID' -d '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"list_courses","arguments":{}}}'
+    {
+     "ok": true,
+     "total": 4,
+     "returned": 4,
+     "truncated": false,
+     "items": [
+      {
+       "name": "범죄의진실과오해",
+       "professor": "곽대훈",
+       "course_id": "202610UN001001-701201"
+      },
+      {
+       "name": "직업과 진로",
+       "professor": "박종철",
+       "course_id": "202610UN001001-700201"
+      },
+      {
+       "name": "딥러닝",
+       "professor": "양희철",
+       "course_id": "202610UN001214-402901"
+      },
+      {
+       "name": "종합설계1",
+       "professor": "이영석",
+       "course_id": "202610UN001214-403002"
+      }
+     ]
+    }
+
+## 5. tools/call get_notices (course=딥러닝, limit=3)
+$ curl -X POST http://127.0.0.1:8000/mcp ... -H 'mcp-session-id: $SID' -d '{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"get_notices","arguments":{"course":"딥러닝","limit":3}}}'
+    {
+     "ok": true,
+     "total": 7,
+     "returned": 3,
+     "truncated": true,
+     "items": [
+      {
+       "title": "출석, 과제 점수 공지",
+       "date": "2026-06-23 22:13",
+       "course_name": "딥러닝",
+       "has_attachment": false
+      },
+      {
+       "title": "기말고사 점수 공지",
+       "date": "2026-06-23 22:12",
+       "course_name": "딥러닝",
+       "has_attachment": true
+      },
+      {
+       "title": "기말고사 공지",
+       "date": "2026-05-21 09:45",
+       "course_name": "딥러닝",
+       "has_attachment": false
+      }
+     ]
+    }
+
+## 6. tools/call get_assignments (course=없는과목) → COURSE_NOT_FOUND
+    {
+     "ok": false,
+     "error": "COURSE_NOT_FOUND",
+     "message": "'없는과목'과 일치하는 과목이 없습니다. list_courses로 정확한 과목명을 확인하세요."
+    }
+
+## 서버 측 로그 (uvicorn)
+    INFO:     127.0.0.1:63423 - "POST /mcp HTTP/1.1" 200 OK
+    INFO:     127.0.0.1:63424 - "POST /mcp HTTP/1.1" 202 Accepted
+    INFO:     127.0.0.1:63425 - "POST /mcp HTTP/1.1" 200 OK
+    INFO:     127.0.0.1:63426 - "POST /mcp HTTP/1.1" 200 OK
+    INFO:     127.0.0.1:63432 - "POST /mcp HTTP/1.1" 200 OK
+    INFO:     127.0.0.1:63434 - "POST /mcp HTTP/1.1" 200 OK
