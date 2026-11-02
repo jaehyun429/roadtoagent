@@ -590,12 +590,14 @@ name = "mcp-server"
 version = "0.1.0"
 source = { virtual = "." }
 dependencies = [
+    { name = "cryptography" },
     { name = "fastmcp" },
     { name = "httpx" },
 ]
 
 [package.metadata]
 requires-dist = [
+    { name = "cryptography", specifier = ">=50.0.2" },
     { name = "fastmcp", specifier = ">=4.1.4" },
     { name = "httpx", specifier = ">=0.28.1" },
 ]

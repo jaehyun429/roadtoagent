@@ -15,6 +15,10 @@
 - 공지 목록 API에는 본문이 없다 (제목·날짜·작성자만). 본문은 별도 도구(get_notice_detail) 범위라 이번엔 뺀다. 과제 본문도 같은 이유로 제외.
 - 응답에 교수 전화번호(writeruser_phone), 암호화 토큰(pdf_attach_file_encdata)이 섞여 온다. 파서가 설계 필드만 고르므로 파서가 곧 필터.
 - is_overdue는 응답의 서버 날짜(current_date) 기준. 로컬 시계보다 정확.
+- 요청 본문은 사이트 프론트엔드가 AES-256-CBC(IV=0, 키는 공개 JS의 getSecKey 상수)로 감싸 `e=<base64>` 폼 필드로 보낸다. 서버도 같은 방식으로 감싼다. 키는 레포에 안 올리고 .env(CAMPUS_AES_KEY). Network 탭에서 잡은 암호문 3개를 코드가 바이트 단위로 재현하는지로 검증했다.
+- 쿠키 없이 API를 치면 HTTP 302 → 로그인 페이지. 그래서 follow_redirects=False로 두고 3xx를 SESSION_EXPIRED로 본다. header.code != 200은 구조 문제로 보고 PARSING_FAILED.
+- 과제·공지 API에 offset/limit이 있어 공지는 서버가 limit만큼만 요청한다 (받아서 자르지 않음). 과제는 limit=20으로 요청하고 tot_cnt가 total.
+- 과목 캐시는 내부용으로 class_no 등 payload에 필요한 필드를 들고 있고, 모델에게는 public_course()로 name/professor/course_id 셋만 넘긴다.
 - 학기는 서버가 오늘 날짜로 계산하되 환경변수(CAMPUS_TERM_YEAR/CAMPUS_TERM_CD)로 고정 가능. 2학기 수강 과목이 없어 개발 중엔 2026/10(1학기)으로 고정. 어느 쪽이든 모델 인자에는 없다.
 
 ### F2. 응답

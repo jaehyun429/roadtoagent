@@ -11,48 +11,78 @@
   CAMPUS_COOKIE  로그인 세션 쿠키 문자열
 """
 
+import base64
 import json
 import os
 import sys
 import time
 from datetime import date
+from pathlib import Path
 from typing import Annotated
 
 import httpx
+from cryptography.hazmat.primitives import padding
+from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 from fastmcp import FastMCP
 from pydantic import Field
 
+
+def load_dotenv() -> None:
+    """server.py 옆의 .env를 읽어 환경변수에 넣는다 (이미 있는 변수는 건드리지 않음).
+    Claude Desktop이 서버를 띄울 땐 쉘 환경이 없어서 이게 필요하다."""
+    env = Path(__file__).with_name(".env")
+    if not env.exists():
+        return
+    for line in env.read_text().splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        k, v = line.split("=", 1)
+        os.environ.setdefault(k.strip(), v.strip())
+
+
+load_dotenv()
 mcp = FastMCP("cybercampus")
 
 # ---------------------------------------------------------------- 설정 ---
-CAMPUS_URL = os.environ.get("CAMPUS_URL", "").rstrip("/")
+CAMPUS_URL = os.environ.get("CAMPUS_URL", "https://dcs-learning.cnu.ac.kr").rstrip("/")
 CAMPUS_COOKIE = os.environ.get("CAMPUS_COOKIE", "")
+# 사이트 프론트엔드가 요청 본문을 AES로 감싸서 보낸다. 키는 사이트의 공개 JS
+# (/js/assets/gibberish-aes-*.js 의 getSecKey)에 적힌 32글자 상수. 레포엔 올리지 않고 .env로.
+CAMPUS_AES_KEY = os.environ.get("CAMPUS_AES_KEY", "")
 CACHE_TTL_SEC = 300          # 캐시는 서버 내부 TTL로만. clear_cache 도구 없음.
 MAX_ITEMS = 20               # 한 응답 최대 건수. 넘으면 잘라서 truncated=True
 TIMEOUT_SEC = 10
 
-# ----- 세 API 정의. Network 탭에서 확인한 값으로 채울 것 (TODO) -----
-# path    : CAMPUS_URL 뒤에 붙는 경로
-# method  : GET 또는 POST
-# payload : 요청 본문. {term_year}, {term_cd}, {course_id}는 서버가 채운다.
-#           모델은 이 값들을 몰라도 된다 — 그래서 도구 인자에 없다.
+# ----- 세 API. 경로와 Payload는 브라우저 Network 탭에서 잡은 요청을 복호화해 확인한 것 -----
+# 모두 POST, 본문은 form 필드 e=<AES(JSON)>. {term_year} 등은 서버가 채운다.
+# 모델은 이 값들을 몰라도 된다 — 그래서 도구 인자에 없다.
 API_COURSES = {
-    "method": "POST",
-    "path": "/TODO/course/list",
-    "payload": {"term_year": "{term_year}", "term_cd": "{term_cd}"},
+    "path": "/api/v1/course/getStdMyCourseList",
+    "payload": {"term_year": "{term_year}", "term_cd": "{term_cd}", "is_current": "Y"},
+}
+# 과제·공지 payload는 브라우저가 과목 객체를 그대로 실어 보내는 형태. 필드 순서까지 맞춘다.
+COURSE_FIELDS = {
+    "class_no": "{class_no}", "course_id": "{course_id}", "course_nm": "{course_nm}",
+    "term_cd": "{term_cd}", "term_cd_nm": "{term_cd_nm}", "term_year": "{term_year}",
+    "subject_cd": "{subject_cd}", "attendance_standard": "{attendance_standard}",
+    "offline_ag_use_yn": "{offline_ag_use_yn}", "individual_ag_use_yn": "{individual_ag_use_yn}",
+    "ocw_yn": "{ocw_yn}", "auditor_course_use_yn": "{auditor_course_use_yn}",
 }
 API_ASSIGNMENTS = {
-    "method": "POST",
-    "path": "/TODO/report/list",
-    "payload": {"course_id": "{course_id}"},
+    "path": "/api/v1/task/stdList",
+    "payload": {
+        "offset": 0, "limit": "{limit}", **COURSE_FIELDS,
+        "search_type": "0", "page_order": "WEEK_NO DESC, SEQ_NO DESC",
+    },
 }
 API_NOTICES = {
-    "method": "POST",
-    "path": "/TODO/board/list",
-    "payload": {"course_id": "{course_id}"},
+    "path": "/api/v1/board/notice/list",
+    "payload": {
+        "q_key": "", "q_where_type": "BOARDITEM_TITLE", **COURSE_FIELDS,
+        "offset": 0, "limit": "{limit}",
+    },
 }
-PAYLOAD_AS_JSON = True       # Network 탭 Payload가 Form Data면 False로
-
 
 def current_term() -> tuple[str, str]:
     """조회할 학기. 모델이 정하지 않고 서버가 정한다.
@@ -134,24 +164,39 @@ def cached(key: str, loader):
 
 
 # ------------------------------------------------------------------ fetch ---
+def aes_encrypt(plaintext: str) -> str:
+    """사이트 JS의 util.aesEncode와 같은 결과: AES-256-CBC, IV=0, PKCS7, base64."""
+    padder = padding.PKCS7(128).padder()
+    data = padder.update(plaintext.encode("utf-8")) + padder.finalize()
+    enc = Cipher(algorithms.AES(CAMPUS_AES_KEY.encode()), modes.CBC(bytes(16))).encryptor()
+    return base64.b64encode(enc.update(data) + enc.finalize()).decode()
+
+
+def build_payload(api: dict, **vars) -> dict:
+    out = {}
+    for k, v in api["payload"].items():
+        if isinstance(v, str) and v.startswith("{") and v.endswith("}"):
+            out[k] = vars[v[1:-1]]
+        else:
+            out[k] = v
+    return out
+
+
 def fetch_json(api: dict, **vars) -> dict:
     """API를 호출해 body(dict)를 돌려준다. 실패는 SourceError로 올린다."""
-    if not CAMPUS_COOKIE:
+    if not CAMPUS_COOKIE or not CAMPUS_AES_KEY:
         raise SourceError(ERR_SESSION_EXPIRED)
 
-    payload = {k: v.format(**vars) if isinstance(v, str) else v for k, v in api["payload"].items()}
-    kwargs = {"json": payload} if PAYLOAD_AS_JSON else {"data": payload}
-    if api["method"] == "GET":
-        kwargs = {"params": payload}
+    payload = build_payload(api, **vars)
+    body = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))  # JS JSON.stringify와 동일
 
     try:
-        r = httpx.request(
-            api["method"],
+        r = httpx.post(
             CAMPUS_URL + api["path"],
+            data={"e": aes_encrypt(body)},
             headers={"Cookie": CAMPUS_COOKIE},
             timeout=TIMEOUT_SEC,
-            follow_redirects=False,   # 로그인 페이지로 가는 302를 그대로 보기 위해
-            **kwargs,
+            follow_redirects=False,   # 세션 만료면 302로 로그인 페이지에 보낸다 (쿠키 없이 쳐서 확인함)
         )
     except (httpx.TimeoutException, httpx.ConnectError, httpx.NetworkError):
         raise SourceError(ERR_SERVER_NOT_RESPONDING)
@@ -168,30 +213,29 @@ def fetch_json(api: dict, **vars) -> dict:
         raise SourceError(ERR_SESSION_EXPIRED)
 
     # 응답 구조: {"header": {"code": 200, "msg": "OK"}, "body": {...}}
-    # TODO: 쿠키 빼고 한 번 쳐서 세션 만료 때 header.code가 뭔지 확인하고 아래 조건 확정
     header = doc.get("header") or {}
-    if header.get("code") != 200:
-        raise SourceError(ERR_SESSION_EXPIRED)
-    body = doc.get("body")
-    if not isinstance(body, dict):
+    body_ = doc.get("body")
+    if header.get("code") != 200 or not isinstance(body_, dict):
         raise SourceError(ERR_PARSING_FAILED)
-    return body
-
+    return body_
 
 # ------------------------------------------------------------------ parse ---
 # 파서가 곧 필터다. 설계한 필드 외에는 아무것도 넘기지 않는다.
 # (응답에는 교수 전화번호, 암호화 토큰, 과제 본문 HTML 수천 자가 섞여 온다)
 
 def parse_courses(body: dict) -> list[dict]:
-    """body.course_list -> [{"name", "professor", "course_id"}]"""
+    """body.course_list -> 내부용 과목 dict. class_no, term_*는 과제·공지 API payload를 만들 때 쓴다."""
+    keys = ["class_no", "course_id", "course_nm", "term_cd", "term_cd_nm", "term_year", "subject_cd",
+            "attendance_standard", "offline_ag_use_yn", "individual_ag_use_yn", "ocw_yn", "auditor_course_use_yn"]
     return [
-        {
-            "name": c["course_nm"],
-            "professor": c["prof_nm"],
-            "course_id": c["course_id"],
-        }
+        {"name": c["course_nm"], "professor": c["prof_nm"], **{k: c.get(k) for k in keys}}
         for c in body["course_list"]
     ]
+
+
+def public_course(c: dict) -> dict:
+    """모델에게 넘기는 건 설계한 셋만."""
+    return {"name": c["name"], "professor": c["professor"], "course_id": c["course_id"]}
 
 
 def parse_assignments(body: dict) -> tuple[list[dict], int]:
@@ -263,7 +307,7 @@ def list_courses() -> dict:
         courses = load_courses()
     except SourceError as e:
         return e.response
-    return ok(courses)
+    return ok([public_course(c) for c in courses])
 
 
 @mcp.tool()
@@ -278,7 +322,7 @@ def get_assignments(
             return err_course_not_found(course)
         items, total = cached(
             f"assignments:{c['course_id']}",
-            lambda: load(API_ASSIGNMENTS, parse_assignments, course_id=c["course_id"]),
+            lambda: load(API_ASSIGNMENTS, parse_assignments, limit=MAX_ITEMS, **c),
         )
     except SourceError as e:
         return e.response
@@ -299,13 +343,14 @@ def get_notices(
         c = find_course(course)
         if c is None:
             return err_course_not_found(course)
+        # API에 limit 인자가 있어 서버가 limit만큼만 요청한다. 캐시 키에도 limit을 넣는다.
         items, total = cached(
-            f"notices:{c['course_id']}",
-            lambda: load(API_NOTICES, parse_notices, course_id=c["course_id"]),
+            f"notices:{c['course_id']}:{limit}",
+            lambda: load(API_NOTICES, parse_notices, limit=limit, **c),
         )
     except SourceError as e:
         return e.response
-    return ok(items[:limit], total)
+    return ok(items, total)
 
 
 # ------------------------------------------------------------------ main ---
