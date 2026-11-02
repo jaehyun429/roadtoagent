@@ -55,10 +55,16 @@ PAYLOAD_AS_JSON = True       # Network 탭 Payload가 Form Data면 False로
 
 
 def current_term() -> tuple[str, str]:
-    """현재 학기. 1학기 코드는 "10"으로 확인됨. 2학기 코드는 2학기 페이지에서 확인할 것 (TODO)."""
+    """조회할 학기. 모델이 정하지 않고 서버가 정한다.
+
+    기본은 오늘 날짜로 계산 (1학기 코드 "10" 확인됨, 2학기는 "20"으로 추정).
+    환경변수 CAMPUS_TERM_YEAR / CAMPUS_TERM_CD가 있으면 그걸 쓴다.
+    (2학기 수강 과목이 없어서 1학기(2026/10)를 보고 싶을 때 등)
+    """
     today = date.today()
-    term_cd = "10" if 3 <= today.month <= 8 else "20"
-    return str(today.year), term_cd
+    year = os.environ.get("CAMPUS_TERM_YEAR") or str(today.year)
+    term_cd = os.environ.get("CAMPUS_TERM_CD") or ("10" if 3 <= today.month <= 8 else "20")
+    return year, term_cd
 
 
 # ------------------------------------------------------------ F2 응답 ---
