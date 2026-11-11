@@ -47,6 +47,7 @@ BROWSER_FALLBACK_TOOL = {
         "공지사항, 과제, 이번학기 수강 과목 확인과 같은 단순 작업은 이 도구 말고 다른 전용 도구를 사용하세요. "
         "다른 도구에서 COURSE_NOT_FOUND와 같은 에러가 발생한 경우엔, 과목이 없어서 발생한 문제이므로 이 도구를 추가 실행하지 마세요. "
         "출석, 계획서, 강의자료 확인과 같은 다른 도구로 정보를 얻을 수 없는 일의 경우에만 사용을 하세요. "
+        "한 번 호출에 한 과목, 한 페이지만. 여러 과목이면 과목마다 따로 부르세요. "
         "앞서 말한 다른 도구로 먼저 해결해보고 안되는 경우에만 사용을 하세요. 느리고 토큰이 많이 드는 작업입니다."
     ),
     "parameters": {
@@ -92,6 +93,9 @@ async def run_bua(name: str, args: dict):
         history = await agent.run(max_steps=BUA_MAX_STEPS)
     except Exception as e:
         return f"ERROR: browser_fallback 실패 — {e}"
+    # 안쪽 층 수치는 루프의 200자 출력에 잘리므로 한 줄로 따로 남긴다 (stderr)
+    print(f"BUA: steps={history.number_of_steps()} tokens={history.usage['input'] + history.usage['output']} "
+          f"sec={round(history.total_duration_seconds(), 1)} ok={bool(history.is_successful())}", file=sys.stderr)
     return {
         "ok": bool(history.is_successful()),
         "result": history.final_result(),
