@@ -10,7 +10,9 @@
   CAMPUS_URL     사이버캠퍼스 기본 URL (예: https://cyber.xxx.ac.kr)
   CAMPUS_COOKIE  로그인 세션 쿠키 문자열
 """
-
+import re
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric import padding as rsa_padding
 import base64
 import json
 import os
@@ -44,9 +46,13 @@ def load_dotenv() -> None:
 load_dotenv()
 mcp = FastMCP("cybercampus")
 
+
+
 # ---------------------------------------------------------------- 설정 ---
+CAMPUS_LOGIN_URL = os.environ.get("CAMPUS_LOGIN_URL", "https://dcs-lcms.cnu.ac.kr")
 CAMPUS_URL = os.environ.get("CAMPUS_URL", "https://dcs-learning.cnu.ac.kr").rstrip("/")
 CAMPUS_COOKIE = os.environ.get("CAMPUS_COOKIE", "")
+CAMPUS_UNIV_NO = os.environ.get("CAMPUS_UNIV_NO", "")   # 로그인 폼의 univ_no (충남대 코드)
 # 사이트 프론트엔드가 요청 본문을 AES로 감싸서 보낸다. 키는 사이트의 공개 JS
 # (/js/assets/gibberish-aes-*.js 의 getSecKey)에 적힌 32글자 상수. 레포엔 올리지 않고 .env로.
 CAMPUS_AES_KEY = os.environ.get("CAMPUS_AES_KEY", "")
@@ -132,12 +138,18 @@ ERR_PARSING_FAILED = fail(
     "파싱 실패, 사이트 구조가 변경된 것 같습니다. 사용자에게 알리세요.",
 )
 
+ERR_LOGIN_FAILED = fail(
+    "LOGIN_FAILED",
+    "로그인 실패, CNU_ID/CNU_PASSWORD를 확인하세요.",
+)
+
 
 def err_course_not_found(name: str) -> dict:
     return fail(
         "COURSE_NOT_FOUND",
         f"'{name}'과 일치하는 과목이 없습니다. list_courses로 정확한 과목명을 확인하세요.",
     )
+    
 
 
 class SourceError(Exception):
@@ -182,11 +194,102 @@ def build_payload(api: dict, **vars) -> dict:
     return out
 
 
-def fetch_json(api: dict, **vars) -> dict:
-    """API를 호출해 body(dict)를 돌려준다. 실패는 SourceError로 올린다."""
-    if not CAMPUS_COOKIE or not CAMPUS_AES_KEY:
-        raise SourceError(ERR_SESSION_EXPIRED)
+def login_form_hidden(html: str) -> dict:
+    """로그인 페이지의 loginForm에서 hidden input을 {name: value}로 꺼낸다."""
+    form = re.search(r'<form[^>]*name="loginForm".*?</form>', html, re.S)
+    if not form:
+        raise SourceError(ERR_PARSING_FAILED)
+    return dict(re.findall(r'<input type="hidden" name="([^"]+)" value="([^"]*)"', form.group(0)))
 
+
+def rsa_encrypt(pub_b64: str, plaintext: str) -> str:
+    """사이트 JS의 JSEncrypt.encrypt와 같은 방식: RSA PKCS#1 v1.5, base64."""
+    pub = serialization.load_der_public_key(base64.b64decode(pub_b64))
+    return base64.b64encode(pub.encrypt(plaintext.encode("utf-8"), rsa_padding.PKCS1v15())).decode()
+
+
+def login() -> str:
+    """ID/비밀번호로 로그인해 세션 쿠키 문자열을 돌려준다."""
+    user_id = os.environ.get("CNU_ID")
+    user_pw = os.environ.get("CNU_PASSWORD")
+    if not CAMPUS_AES_KEY or not CAMPUS_UNIV_NO or not user_id or not user_pw:
+        raise SourceError(ERR_LOGIN_FAILED)
+
+    try:
+        with httpx.Client(timeout=TIMEOUT_SEC, follow_redirects=False) as c:
+            g = c.get(CAMPUS_LOGIN_URL + "/login")
+            hidden = login_form_hidden(g.text)
+            if not hidden.get("key"):
+                raise SourceError(ERR_PARSING_FAILED)
+
+            # 사이트 JS의 Object.fromEntries(new FormData(loginForm))와 같은 구성
+                        # 포털 로그인(cnu_auth 체크) 경로. 사이트 JS의 FormData와 같은 구성
+            payload = {
+                "redirect_url": hidden.get("redirect_url", ""),
+                "key": hidden["key"],
+                "univ_no": CAMPUS_UNIV_NO,
+                "org_password": hidden.get("org_password", ""),
+                "user_ip": hidden.get("user_ip", ""),
+                "cnu_auth": "Y",
+                "user_id": user_id,
+                "user_password": user_pw,   # 포털 경로는 RSA 암호화를 하지 않는다
+            }
+            body = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+
+            r = c.post(
+                CAMPUS_LOGIN_URL + "/api/v1/user/apiCnuAuthLogin",
+                data={"e": aes_encrypt(body)},
+            )
+            # 세션 쿠키는 GET 때 이미 쿠키병에 들어온다. with 안에서 읽어야 한다.
+            cookie = "; ".join(f"{k}={v}" for k, v in c.cookies.items())
+    except (httpx.TimeoutException, httpx.ConnectError, httpx.NetworkError):
+        raise SourceError(ERR_SERVER_NOT_RESPONDING)
+
+    if r.status_code >= 500:
+        raise SourceError(ERR_SERVER_NOT_RESPONDING)
+    try:
+        doc = r.json()
+    except ValueError:
+        raise SourceError(ERR_LOGIN_FAILED)
+    print(doc, file=sys.stderr)   # 임시: 실제 응답 확인용. 확인 후 삭제
+    if doc.get("header", {}).get("code") != 200:
+        raise SourceError(ERR_LOGIN_FAILED)
+    ret_code = str((doc.get("body") or {}).get("ret_code"))
+    # login.js 기준 "0": 개인정보 동의 창, "-1": 미승인, "-2": 초기 비밀번호 미변경. 그 외가 정상 진행
+    if ret_code in ("0", "-1", "-2"):
+        raise SourceError(ERR_LOGIN_FAILED)
+    if not cookie:
+        raise SourceError(ERR_LOGIN_FAILED)
+    return cookie
+
+
+def fetch_json(api: dict, **vars) -> dict:
+    """API를 호출해 body(dict)를 돌려준다. 실패는 SourceError로 올린다.
+
+    세션이 없거나 만료됐으면 login()으로 쿠키를 새로 받아 같은 요청을 한 번만 다시 보낸다.
+    로그인도 실패하면 그때 SESSION_EXPIRED가 모델에게 간다. (CNU_ID/CNU_PASSWORD가 없으면 예전처럼 바로 SESSION_EXPIRED)
+    """
+    global CAMPUS_COOKIE
+    if not CAMPUS_AES_KEY:
+        raise SourceError(ERR_SESSION_EXPIRED)
+    can_login = bool(os.environ.get("CNU_ID") and os.environ.get("CNU_PASSWORD"))
+
+    if not CAMPUS_COOKIE:
+        if not can_login:
+            raise SourceError(ERR_SESSION_EXPIRED)
+        CAMPUS_COOKIE = login()          # 쿠키가 처음부터 없을 때도 같은 경로
+    try:
+        return _fetch_once(api, **vars)
+    except SourceError as e:
+        if e.response is not ERR_SESSION_EXPIRED or not can_login:
+            raise
+        CAMPUS_COOKIE = login()          # 만료 → 재로그인 → 1회 재시도. login() 실패는 그대로 올라간다
+        _cache.clear()                   # 옛 세션으로 받은 캐시는 버린다
+        return _fetch_once(api, **vars)
+
+
+def _fetch_once(api: dict, **vars) -> dict:
+    """실제 HTTP 1회. 재시도 판단은 fetch_json이 한다."""
     payload = build_payload(api, **vars)
     body = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))  # JS JSON.stringify와 동일
 
