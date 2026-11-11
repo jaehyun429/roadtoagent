@@ -96,6 +96,7 @@ async def run_bua(name: str, args: dict):
         "ok": bool(history.is_successful()),
         "result": history.final_result(),
         "browser_steps": history.number_of_steps(),
+        "browser_tokens": history.usage["input"] + history.usage["output"],   # BUA 안쪽 LLM 토큰 (바깥 루프와 별도 층)
         "elapsed_sec": round(history.total_duration_seconds(), 1),
     }
 
