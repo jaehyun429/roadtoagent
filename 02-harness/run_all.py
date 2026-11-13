@@ -70,11 +70,14 @@ async def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--tasks", help="예: 2,4,10")
     ap.add_argument("--set", choices=["base", "variation", "both"], default="both")
+    # 설정을 바꾼 뒤 일부만 다시 돌릴 때 원래 results.jsonl 을 덮지 않고 다른 파일에 쓰기 위한 옵션
+    ap.add_argument("--out", default=str(RESULTS), help="결과 파일 (기본 results.jsonl)")
     a = ap.parse_args()
+    out = HERE / a.out
     nums = {int(x) for x in a.tasks.split(",")} if a.tasks else None
     rows = select(nums, a.set)
     client = anthropic.Anthropic()
-    print(f"{len(rows)}개 실행 → {RESULTS}", file=sys.stderr)
+    print(f"{len(rows)}개 실행 → {out}", file=sys.stderr)
 
     for t in rows:
         tag = f"{t['task_num']}{'v' if t['variation'] else ''}"
@@ -90,7 +93,7 @@ async def main() -> None:
             "browser_tokens": s["browser_tokens"], "browser_sec": s["browser_sec"],
             "judge_reason": reason, "judge_tokens": jtok,
         }
-        with open(RESULTS, "a", encoding="utf-8") as f:
+        with open(out, "a", encoding="utf-8") as f:
             f.write(json.dumps(row, ensure_ascii=False) + "\n")
         print(f"RESULT {tag}: success={success} channel={row['channel']} steps={row['steps']} tokens={row['tokens']} "
               f"browser={row['browser_calls']}/{row['browser_steps']}/{row['browser_tokens']} | {reason}", file=sys.stderr)
