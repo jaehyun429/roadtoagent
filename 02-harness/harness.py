@@ -121,8 +121,11 @@ def logger(task: str):
     return log
 
 
-async def main(task: str) -> None:
+async def main(task: str) -> dict:
+    """태스크 1개 실행. results.jsonl 한 줄을 만들 재료(바깥 층 + 안쪽 층 합계)를 dict로 돌려준다."""
     log = logger(task)
+    started = time.time()                                    # 소요 시간: 명령 입력 ~ 최종 답 (design.md 4번)
+    inner = {"browser_calls": 0, "browser_steps": 0, "browser_tokens": 0, "browser_sec": 0.0}   # 안쪽 층 합계
     async with Client(transport) as mcp:
         # ---- TOOLS: list_tools() 결과 3개 + 손으로 쓴 1개 ----
         mcp_tools = await mcp.list_tools()
@@ -149,7 +152,13 @@ async def main(task: str) -> None:
                 return {"ok": False, "error": "BROWSER_BUDGET_EXCEEDED",
                         "message": f"browser_fallback 호출 상한({BUA_MAX_CALLS}회) 초과. 더 시도하지 말고 지금까지의 결과로 사용자에게 알리세요."}
             bua_calls += 1
-            return await run_bua(name, args)
+            result = await run_bua(name, args)
+            if isinstance(result, dict):                     # 안쪽 층 수치를 합계에 더한다 (10번처럼 여러 번 부르면 합산)
+                inner["browser_calls"] += 1
+                inner["browser_steps"] += result["browser_steps"]
+                inner["browser_tokens"] += result["browser_tokens"]
+                inner["browser_sec"] += result["elapsed_sec"]
+            return result
 
         TOOL_MAP = {t.name: call_mcp for t in mcp_tools}
         TOOL_MAP["browser_fallback"] = guarded_bua
@@ -165,6 +174,10 @@ async def main(task: str) -> None:
                 betas=["server-side-fallback-2026-07-01"], fallbacks="default",
             )
 
+        def summary(answer, stop):
+            return {"steps": step, "tokens": tokens, "elapsed_sec": round(time.time() - started, 1),
+                    "answer": answer, "stop": stop, **inner, "browser_sec": round(inner["browser_sec"], 1)}
+
         tokens = 0
         step = 0
         while step < MAX_STEPS:
@@ -174,7 +187,7 @@ async def main(task: str) -> None:
             except anthropic.APIError as e:                      # 402/429/5xx 등. 지금은 기록하고 멈춘다 (재개는 design.md 3번)
                 print(f"API_ERROR: {e}")
                 log(event="api_error", step=step, error=str(e)[:300])
-                return
+                return summary(None, "api_error")
             tokens += response.usage.input_tokens + response.usage.output_tokens
             calls = [b for b in response.content if b.type == "tool_use"]
             if not calls:
@@ -183,7 +196,7 @@ async def main(task: str) -> None:
                 print(f"총 스텝: {step}")
                 print(f"총 토큰 사용량: {tokens}")
                 log(event="end", steps=step, tokens=tokens, stop_reason=response.stop_reason, answer=answer)
-                break
+                return summary(answer, response.stop_reason)
             messages.append({"role": "assistant", "content": response.content})   # 모델이 고른 도구 호출을 이력에
             results = []
             for c in calls:
@@ -204,6 +217,7 @@ async def main(task: str) -> None:
             print(f"총 스텝: {step}")
             print(f"총 토큰 사용량: {tokens}")
             log(event="step_limit", steps=step, tokens=tokens)
+            return summary(None, "step_limit")
 
 
 if __name__ == "__main__":

@@ -1,0 +1,142 @@
+[
+ {
+  "task_num": 1,
+  "variation": false,
+  "text": "딥러닝 공지사항에 기말고사 관련 공지 올라왔어?",
+  "expected": "\"기말고사 공지\"(5/21), \"기말고사 점수 공지\"(6/23) 두 건 언급",
+  "expected_channel": "tool"
+ },
+ {
+  "task_num": 2,
+  "variation": false,
+  "text": "딥러닝 공지사항에서 가장 최근 글 제목 알려줘",
+  "expected": "\"출석, 과제 점수 공지\"",
+  "expected_channel": "tool"
+ },
+ {
+  "task_num": 3,
+  "variation": false,
+  "text": "종합설계1 과목에 미제출 과제가 있는지 알려줘",
+  "expected": "\"마감 기한 안 지난 미제출 과제 없음\"류 응답 + 브라우저 호출 로그 없음",
+  "expected_channel": "tool"
+ },
+ {
+  "task_num": 4,
+  "variation": false,
+  "text": "딥러닝 과목 출석률 알려줘",
+  "expected": "100% (사이트 학습현황에서 확인)",
+  "expected_channel": "browser"
+ },
+ {
+  "task_num": 5,
+  "variation": false,
+  "text": "종합설계1 과목 공지사항에서 가장 최근 글 제목 알려줘",
+  "expected": "\"[과제 및 출석 성적 공지]\" (API로 확인)",
+  "expected_channel": "tool"
+ },
+ {
+  "task_num": 6,
+  "variation": false,
+  "text": "이번학기 수강 과목 뭐 있는지 알려줘",
+  "expected": "범죄의진실과오해, 직업과 진로, 딥러닝, 종합설계1 네 개 전부",
+  "expected_channel": "tool"
+ },
+ {
+  "task_num": 7,
+  "variation": false,
+  "text": "딥러닝 과목 강의계획서 평가비율 알려줘",
+  "expected": "중간40/기말40/출석10/과제10",
+  "expected_channel": "browser"
+ },
+ {
+  "task_num": 8,
+  "variation": false,
+  "text": "직업과 진로 강의계획서 평가비율 알려줘",
+  "expected": "중간10/기말10/출석50/과제30",
+  "expected_channel": "browser"
+ },
+ {
+  "task_num": 9,
+  "variation": false,
+  "text": "알고리즘 과목 가장 최근 공지사항 확인해줘",
+  "expected": "\"이번 학기 과목에 없음\" 류 응답 + 브라우저 호출 로그 없음",
+  "expected_channel": "tool"
+ },
+ {
+  "task_num": 10,
+  "variation": false,
+  "text": "이번학기 수강과목 중에서 성적 매길때 시험 비중이 제일 큰 과목 알려줘",
+  "expected": "딥러닝",
+  "expected_channel": "both"
+ },
+ {
+  "task_num": 1,
+  "variation": true,
+  "text": "딥러닝 공지에 기말 관련 공지 올라왔어?",
+  "expected": "\"기말고사 공지\"(5/21), \"기말고사 점수 공지\"(6/23) 두 건 언급",
+  "expected_channel": "tool"
+ },
+ {
+  "task_num": 2,
+  "variation": true,
+  "text": "딥러닝 공지에서 가장 최신글 제목 알려줘",
+  "expected": "\"출석, 과제 점수 공지\"",
+  "expected_channel": "tool"
+ },
+ {
+  "task_num": 3,
+  "variation": true,
+  "text": "종설 과목에 안낸 과제가 있는지 알려줘",
+  "expected": "\"마감 기한 안 지난 미제출 과제 없음\"류 응답 + 브라우저 호출 로그 없음",
+  "expected_channel": "tool"
+ },
+ {
+  "task_num": 4,
+  "variation": true,
+  "text": "딥러닝 출석률 알려줘",
+  "expected": "100% (사이트 학습현황에서 확인)",
+  "expected_channel": "browser"
+ },
+ {
+  "task_num": 5,
+  "variation": true,
+  "text": "종설 공지에서 가장 최근 글 제목 알려줘",
+  "expected": "\"[과제 및 출석 성적 공지]\" (API로 확인)",
+  "expected_channel": "tool"
+ },
+ {
+  "task_num": 6,
+  "variation": true,
+  "text": "수강 과목 뭐 있는지 알려줘",
+  "expected": "범죄의진실과오해, 직업과 진로, 딥러닝, 종합설계1 네 개 전부",
+  "expected_channel": "tool"
+ },
+ {
+  "task_num": 7,
+  "variation": true,
+  "text": "딥러닝 과목 평가비율 알려줘",
+  "expected": "중간40/기말40/출석10/과제10",
+  "expected_channel": "browser"
+ },
+ {
+  "task_num": 8,
+  "variation": true,
+  "text": "직진 평가비율 알려줘",
+  "expected": "중간10/기말10/출석50/과제30",
+  "expected_channel": "browser"
+ },
+ {
+  "task_num": 9,
+  "variation": true,
+  "text": "알고리즘 최신 공지사항 확인해줘",
+  "expected": "\"이번 학기 과목에 없음\" 류 응답 + 브라우저 호출 로그 없음",
+  "expected_channel": "tool"
+ },
+ {
+  "task_num": 10,
+  "variation": true,
+  "text": "이번학기에서 시험 비중이 제일 큰 과목 알려줘",
+  "expected": "딥러닝",
+  "expected_channel": "both"
+ }
+]
