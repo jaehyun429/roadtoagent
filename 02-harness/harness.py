@@ -85,7 +85,9 @@ async def run_bua(name: str, args: dict):
     browser = Browser(
         "chromium",                              # 로컬 크롬 (기본값은 Browser Use 클라우드라 꼭 지정)
         headless=True,
-        allowed_domains=["dcs-lcms.cnu.ac.kr", "dcs-learning.cnu.ac.kr"],
+        # 강의계획서 전문은 "강의계획서 바로가기" 팝업이 여는 학사 사이트(cnuit)에 있다. 11/13 실행에서
+        # 이 도메인이 막혀 강의계획서 태스크 6개가 전부 실패해 추가함.
+        allowed_domains=["dcs-lcms.cnu.ac.kr", "dcs-learning.cnu.ac.kr", "cnuit.cnu.ac.kr"],
     )
     agent = Agent(
         task=f"사이버캠퍼스 {CAMPUS_HOME} 에서 다음을 수행해줘. 결과가 없으면 없다고 알려주면 돼: {args['task']}",
