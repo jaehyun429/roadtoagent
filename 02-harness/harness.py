@@ -3,7 +3,9 @@
 
 과제 00 agent.py에서 바뀐 자리:
   TOOLS    : 손으로 쓴 스키마 3개   →  MCP list_tools() 결과 3개 + 손으로 쓴 browser_fallback 1개
-  TOOL_MAP : 이름 → 내 파이썬 함수  →  3개는 mcp.call_tool(name, args), browser_fallback은 run_bua
+  TOOL_MAP : 이름 → 내 파이썬 함수  →  3개는 mcp.call_tool(name, args), browser_fallback은 run_bua (호출 상한 가드 포함)
+  모델 API : Gemini Interactions    →  Anthropic Messages (2026-11-13 교체. Gemini는 서버가 대화를 들고 있어 previous_interaction_id만
+             넘겼지만, Messages API는 무상태라 messages 리스트를 내가 쌓아서 매번 전부 보낸다 — 과제 00 NOTES 1번 그대로)
 while 루프(스텝 제한, 도구 호출, 결과 되돌려주기)는 그대로.
 
 실행:  uv run harness.py                     # tasks.md 1번
@@ -16,18 +18,19 @@ import pathlib
 import sys
 import time
 
-from browser_use import Agent, Browser, ChatGoogle
+import anthropic
+from browser_use import Agent, Browser, ChatAnthropic
 from dotenv import load_dotenv
 from fastmcp import Client
 from fastmcp.client.transports import StdioTransport
-from google import genai
 
 HERE = pathlib.Path(__file__).parent
-load_dotenv(HERE / ".env")                      # GEMINI_API_KEY, CNU_ID, CNU_PASSWORD (01 서버의 쿠키는 서버 쪽 .env가 읽음)
+load_dotenv(HERE / ".env")                      # ANTHROPIC_API_KEY, CNU_ID, CNU_PASSWORD (01 서버의 쿠키는 서버 쪽 .env가 읽음)
 os.environ.setdefault("ANONYMIZED_TELEMETRY", "false")   # browser-use 사용 통계 전송 끄기
 
-MODEL = "gemini-3.6-flash"
-MAX_STEPS = 15
+MODEL = "claude-sonnet-5-5"
+MAX_STEPS = 15                                   # 바깥 루프: API 호출 1회 = 1스텝
+MAX_TOKENS = 16000                               # 응답 1회 출력 상한 (스트리밍 없이 쓸 때 권장값)
 BUA_MAX_STEPS = 20                               # 기존 BUA(test_finetuned.py)와 같은 값
 BUA_MAX_CALLS = 4                                # 태스크 1개당 browser_fallback 호출 상한 (예산 가드, design.md 3번)
 SERVER_DIR = (HERE / ".." / "01-mcp-server").resolve()
@@ -42,9 +45,8 @@ transport = StdioTransport(
     env={**os.environ, "FASTMCP_SHOW_SERVER_BANNER": "0"},
 )
 
-# ---- 손으로 쓴 도구 1개: 설명문은 design.md 2번 그대로 ----
+# ---- 손으로 쓴 도구 1개: 설명문은 design.md 2번 그대로. Anthropic 도구 형식 = {name, description, input_schema} ----
 BROWSER_FALLBACK_TOOL = {
-    "type": "function",
     "name": "browser_fallback",
     "description": (
         "공지사항, 과제, 이번학기 수강 과목 확인과 같은 단순 작업은 이 도구 말고 다른 전용 도구를 사용하세요. "
@@ -53,7 +55,7 @@ BROWSER_FALLBACK_TOOL = {
         "한 번 호출에 한 과목, 한 페이지만. 여러 과목이면 과목마다 따로 부르세요. "
         "앞서 말한 다른 도구로 먼저 해결해보고 안되는 경우에만 사용을 하세요. 느리고 토큰이 많이 드는 작업입니다."
     ),
-    "parameters": {
+    "input_schema": {
         "type": "object",
         "properties": {
             "task": {
@@ -66,13 +68,12 @@ BROWSER_FALLBACK_TOOL = {
 }
 
 
-def to_gemini_tool(tool) -> dict:
-    """MCP Tool(name, description, input_schema) → 과제 00에서 손으로 쓰던 딕셔너리 모양."""
+def to_claude_tool(tool) -> dict:
+    """MCP Tool(name, description, input_schema) → Anthropic 도구 dict. 키 이름이 MCP와 같아서 그대로 옮기면 된다."""
     return {
-        "type": "function",
         "name": tool.name,
         "description": tool.description or "",
-        "parameters": tool.input_schema,
+        "input_schema": tool.input_schema,
     }
 
 
@@ -88,7 +89,7 @@ async def run_bua(name: str, args: dict):
     )
     agent = Agent(
         task=f"사이버캠퍼스 {CAMPUS_HOME} 에서 다음을 수행해줘. 결과가 없으면 없다고 알려주면 돼: {args['task']}",
-        llm=ChatGoogle(MODEL),                   # 루프와 같은 모델 (비교 실험에서 변수 하나 줄이기)
+        llm=ChatAnthropic(MODEL),                # 루프와 같은 모델 (비교 실험에서 변수 하나 줄이기)
         browser=browser,
         sensitive_data={CAMPUS_HOME: {"x_user_id": user_id, "x_user_pw": user_pw}},
     )
@@ -115,7 +116,7 @@ def logger(task: str):
     def log(**row):
         with open(path, "a", encoding="utf-8") as f:
             f.write(json.dumps({"ts": time.strftime("%H:%M:%S"), **row}, ensure_ascii=False) + "\n")
-    log(event="start", task=task)
+    log(event="start", task=task, model=MODEL)
     print("LOG:", path)
     return log
 
@@ -125,7 +126,7 @@ async def main(task: str) -> None:
     async with Client(transport) as mcp:
         # ---- TOOLS: list_tools() 결과 3개 + 손으로 쓴 1개 ----
         mcp_tools = await mcp.list_tools()
-        TOOLS = [to_gemini_tool(t) for t in mcp_tools] + [BROWSER_FALLBACK_TOOL]
+        TOOLS = [to_claude_tool(t) for t in mcp_tools] + [BROWSER_FALLBACK_TOOL]
         print("TOOLS:", [t["name"] for t in TOOLS])
 
         # ---- TOOL_MAP: 서버 도구 3개는 call_mcp, browser_fallback은 run_bua (A안: 분기는 여기 한 곳) ----
@@ -153,43 +154,51 @@ async def main(task: str) -> None:
         TOOL_MAP = {t.name: call_mcp for t in mcp_tools}
         TOOL_MAP["browser_fallback"] = guarded_bua
 
-        # ---- 아래는 과제 00 루프 그대로 ----
-        client = genai.Client()
-        interaction = client.interactions.create(model=MODEL, input=task, tools=TOOLS)
+        # ---- 아래는 과제 00 루프. 모델 호출 두 줄과 messages 쌓기만 Anthropic 식으로 바뀜 ----
+        client = anthropic.Anthropic()                           # ANTHROPIC_API_KEY 를 환경에서 읽는다
+        messages = [{"role": "user", "content": task}]           # 첫 호출엔 태스크 하나
+
+        def ask():
+            # 안전 분류기가 거절(stop_reason=refusal)하면 서버가 다른 모델로 같은 요청을 이어 돌리는 옵션(fallbacks).
+            return client.beta.messages.create(
+                model=MODEL, max_tokens=MAX_TOKENS, tools=TOOLS, messages=messages,
+                betas=["server-side-fallback-2026-07-01"], fallbacks="default",
+            )
 
         tokens = 0
         step = 0
         while step < MAX_STEPS:
             step += 1
-            calls = [s for s in interaction.steps if s.type == "function_call"]
+            try:
+                response = ask()
+            except anthropic.APIError as e:                      # 402/429/5xx 등. 지금은 기록하고 멈춘다 (재개는 design.md 3번)
+                print(f"API_ERROR: {e}")
+                log(event="api_error", step=step, error=str(e)[:300])
+                return
+            tokens += response.usage.input_tokens + response.usage.output_tokens
+            calls = [b for b in response.content if b.type == "tool_use"]
             if not calls:
-                print(interaction.output_text)
+                answer = "".join(b.text for b in response.content if b.type == "text")
+                print(answer)
                 print(f"총 스텝: {step}")
-                tokens += interaction.usage.total_tokens
                 print(f"총 토큰 사용량: {tokens}")
-                log(event="end", steps=step, tokens=tokens, answer=interaction.output_text)
+                log(event="end", steps=step, tokens=tokens, stop_reason=response.stop_reason, answer=answer)
                 break
+            messages.append({"role": "assistant", "content": response.content})   # 모델이 고른 도구 호출을 이력에
             results = []
             for c in calls:
                 if c.name in TOOL_MAP:
-                    result = await TOOL_MAP[c.name](c.name, c.arguments)
+                    result = await TOOL_MAP[c.name](c.name, c.input)
                 else:
                     result = f"ERROR: Unknown tool {c.name}"
                 results.append({
-                    "type": "function_result",
-                    "name": c.name,
-                    "call_id": c.id,
-                    "result": [{"type": "text", "text": json.dumps(result, ensure_ascii=False)}],
+                    "type": "tool_result",
+                    "tool_use_id": c.id,                                           # 어느 호출의 결과인지 id로 짝 맞춤
+                    "content": json.dumps(result, ensure_ascii=False),
                 })
-                print(f"STEP {step} / {c.name} {c.arguments} / {json.dumps(result, ensure_ascii=False)[:200]}")
-                log(event="tool", step=step, name=c.name, args=c.arguments, result=result)
-            tokens += interaction.usage.total_tokens
-            interaction = client.interactions.create(
-                model=MODEL,
-                previous_interaction_id=interaction.id,
-                tools=TOOLS,
-                input=results,
-            )
+                print(f"STEP {step} / {c.name} {c.input} / {json.dumps(result, ensure_ascii=False)[:200]}")
+                log(event="tool", step=step, name=c.name, args=c.input, result=result)
+            messages.append({"role": "user", "content": results})                 # 도구 결과를 이력에 → 다음 호출 때 전부 다시 보냄
         else:
             print("STEP_LIMIT")
             print(f"총 스텝: {step}")

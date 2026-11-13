@@ -512,17 +512,17 @@ name = "harness"
 version = "0.1.0"
 source = { virtual = "." }
 dependencies = [
+    { name = "anthropic" },
     { name = "browser-use" },
     { name = "fastmcp" },
-    { name = "google-genai" },
     { name = "python-dotenv" },
 ]
 
 [package.metadata]
 requires-dist = [
+    { name = "anthropic", specifier = ">=2.8.0" },
     { name = "browser-use", specifier = ">=1.0.0" },
     { name = "fastmcp", specifier = ">=4.1.6" },
-    { name = "google-genai", specifier = "==2.34.0" },
     { name = "python-dotenv", specifier = ">=1.2.2" },
 ]
 
