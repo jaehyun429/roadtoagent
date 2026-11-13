@@ -36,10 +36,13 @@ def judge(client: anthropic.Anthropic, task: dict, answer: str | None, browser_c
     """기대 결과와 최종 답을 대조해 (success, 근거 한 줄, 판정 토큰)을 돌려준다."""
     if answer is None:
         return False, "최종 답 없음 (스텝 제한 또는 API 에러)", 0
+    # 11/13 1차 판정에서 답은 맞는데 주의 문구의 "확인하지 못함/추정" 단어만 보고 실패로 찍은 오판이 3건(3v, 7, 8v) 나와
+    # "핵심 답이 맞으면 주의 문구는 무시"로 규칙을 좁혔다. 26행 전부 rejudge.py 로 다시 판정함.
     prompt = (
         "다음은 사이버캠퍼스 에이전트의 실행 결과다. 기대 결과를 충족했는지 판정하라.\n"
         "기대 결과에 '브라우저 호출 로그 없음'이 있으면 browser_calls가 0이어야 충족이다.\n"
-        "수치나 제목은 기대 결과와 같아야 한다. 추정이나 '확인하지 못함'은 불충족이다.\n\n"
+        "핵심 답(수치·제목·과목명)이 기대 결과와 같아야 충족이다. 핵심 답이 없거나 다르거나 추정값이면 불충족이다.\n"
+        "핵심 답이 맞으면, 덧붙인 주의 문구에 '확인하지 못함'이나 '추정'이 있어도 충족이다.\n\n"
         f"[태스크] {task['text']}\n[기대 결과] {task['expected']}\n[browser_calls] {browser_calls}\n[최종 답]\n{answer}"
     )
     # max_tokens에는 모델의 생각(thinking)도 포함된다. 512로 두니 생각만 하다 JSON이 잘렸다(JSONDecodeError). 넉넉히 주고 effort는 낮춘다.
