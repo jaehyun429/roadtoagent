@@ -29,6 +29,7 @@ os.environ.setdefault("ANONYMIZED_TELEMETRY", "false")   # browser-use 사용 �
 MODEL = "gemini-3.6-flash"
 MAX_STEPS = 15
 BUA_MAX_STEPS = 20                               # 기존 BUA(test_finetuned.py)와 같은 값
+BUA_MAX_CALLS = 4                                # 태스크 1개당 browser_fallback 호출 상한 (예산 가드, design.md 3번)
 SERVER_DIR = (HERE / ".." / "01-mcp-server").resolve()
 CAMPUS_HOME = "https://dcs-lcms.cnu.ac.kr"
 LOG_DIR = HERE / "logs"                          # 실행 1회 = 파일 1개, 도구 호출 1건 = JSON 1줄 (결과 전문)
@@ -138,8 +139,19 @@ async def main(task: str) -> None:
             except Exception as e:
                 return f"ERROR: {e}"
 
+        # 예산 가드: 모델 판단에 맡기지 않고 하네스가 센다. 상한을 넘으면 브라우저를 띄우지 않고 거절 응답만 돌려준다.
+        bua_calls = 0
+
+        async def guarded_bua(name: str, args: dict):
+            nonlocal bua_calls
+            if bua_calls >= BUA_MAX_CALLS:
+                return {"ok": False, "error": "BROWSER_BUDGET_EXCEEDED",
+                        "message": f"browser_fallback 호출 상한({BUA_MAX_CALLS}회) 초과. 더 시도하지 말고 지금까지의 결과로 사용자에게 알리세요."}
+            bua_calls += 1
+            return await run_bua(name, args)
+
         TOOL_MAP = {t.name: call_mcp for t in mcp_tools}
-        TOOL_MAP["browser_fallback"] = run_bua
+        TOOL_MAP["browser_fallback"] = guarded_bua
 
         # ---- 아래는 과제 00 루프 그대로 ----
         client = genai.Client()
