@@ -123,8 +123,10 @@ def logger(task: str):
     return log
 
 
-async def main(task: str) -> dict:
-    """태스크 1개 실행. results.jsonl 한 줄을 만들 재료(바깥 층 + 안쪽 층 합계)를 dict로 돌려준다."""
+async def main(task: str, browser_only: bool = False) -> dict:
+    """태스크 1개 실행. results.jsonl 한 줄을 만들 재료(바깥 층 + 안쪽 층 합계)를 dict로 돌려준다.
+    browser_only: TODO 4 비교 실험용. 루프는 그대로 두고 모델에 주는 도구를 browser_fallback 하나로 줄여
+    도구로 풀던 태스크를 브라우저 경로로 강제한다 (같은 일을 두 경로로 한 비용 비교)."""
     log = logger(task)
     started = time.time()                                    # 소요 시간: 명령 입력 ~ 최종 답 (design.md 4번)
     inner = {"browser_calls": 0, "browser_steps": 0, "browser_tokens": 0, "browser_sec": 0.0}   # 안쪽 층 합계
@@ -132,6 +134,8 @@ async def main(task: str) -> dict:
         # ---- TOOLS: list_tools() 결과 3개 + 손으로 쓴 1개 ----
         mcp_tools = await mcp.list_tools()
         TOOLS = [to_claude_tool(t) for t in mcp_tools] + [BROWSER_FALLBACK_TOOL]
+        if browser_only:
+            TOOLS = [BROWSER_FALLBACK_TOOL]
         print("TOOLS:", [t["name"] for t in TOOLS])
 
         # ---- TOOL_MAP: 서버 도구 3개는 call_mcp, browser_fallback은 run_bua (A안: 분기는 여기 한 곳) ----

@@ -32,7 +32,8 @@ JUDGE_SCHEMA = {
 }
 
 
-def judge(client: anthropic.Anthropic, task: dict, answer: str | None, browser_calls: int) -> tuple[bool, str, int]:
+def judge(client: anthropic.Anthropic, task: dict, answer: str | None, browser_calls: int,
+          browser_only: bool = False) -> tuple[bool, str, int]:
     """기대 결과와 최종 답을 대조해 (success, 근거 한 줄, 판정 토큰)을 돌려준다."""
     if answer is None:
         return False, "최종 답 없음 (스텝 제한 또는 API 에러)", 0
@@ -45,6 +46,9 @@ def judge(client: anthropic.Anthropic, task: dict, answer: str | None, browser_c
         "핵심 답이 맞으면, 덧붙인 주의 문구에 '확인하지 못함'이나 '추정'이 있어도 충족이다.\n\n"
         f"[태스크] {task['text']}\n[기대 결과] {task['expected']}\n[browser_calls] {browser_calls}\n[최종 답]\n{answer}"
     )
+    if browser_only:   # 브라우저 강제 실험에서는 기대 결과의 "브라우저 호출 로그 없음" 조건이 성립할 수 없으니 뺀다
+        prompt = prompt.replace("기대 결과에 '브라우저 호출 로그 없음'이 있으면 browser_calls가 0이어야 충족이다.\n",
+                                "이 실행은 브라우저 경로를 강제한 실험이다. 기대 결과의 '브라우저 호출 로그 없음' 조건은 무시한다.\n")
     # max_tokens에는 모델의 생각(thinking)도 포함된다. 512로 두니 생각만 하다 JSON이 잘렸다(JSONDecodeError). 넉넉히 주고 effort는 낮춘다.
     r = client.messages.create(
         model=JUDGE_MODEL, max_tokens=4096,
@@ -75,6 +79,7 @@ async def main() -> None:
     ap.add_argument("--set", choices=["base", "variation", "both"], default="both")
     # 설정을 바꾼 뒤 일부만 다시 돌릴 때 원래 results.jsonl 을 덮지 않고 다른 파일에 쓰기 위한 옵션
     ap.add_argument("--out", default=str(RESULTS), help="결과 파일 (기본 results.jsonl)")
+    ap.add_argument("--browser-only", action="store_true", help="TODO 4: 도구 없이 browser_fallback 만 주고 돌린다")
     a = ap.parse_args()
     out = HERE / a.out
     nums = {int(x) for x in a.tasks.split(",")} if a.tasks else None
@@ -85,8 +90,8 @@ async def main() -> None:
     for t in rows:
         tag = f"{t['task_num']}{'v' if t['variation'] else ''}"
         print(f"\n===== task {tag}: {t['text']}", file=sys.stderr)
-        s = await harness.main(t["text"])
-        success, reason, jtok = judge(client, t, s["answer"], s["browser_calls"])
+        s = await harness.main(t["text"], browser_only=a.browser_only)
+        success, reason, jtok = judge(client, t, s["answer"], s["browser_calls"], browser_only=a.browser_only)
         row = {
             "task_num": t["task_num"], "variation": t["variation"], "date": time.strftime("%Y-%m-%d"),
             "model": harness.MODEL, "success": success,
