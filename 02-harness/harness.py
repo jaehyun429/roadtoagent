@@ -14,6 +14,7 @@ import json
 import os
 import pathlib
 import sys
+import time
 
 from browser_use import Agent, Browser, ChatGoogle
 from dotenv import load_dotenv
@@ -30,6 +31,7 @@ MAX_STEPS = 15
 BUA_MAX_STEPS = 20                               # 기존 BUA(test_finetuned.py)와 같은 값
 SERVER_DIR = (HERE / ".." / "01-mcp-server").resolve()
 CAMPUS_HOME = "https://dcs-lcms.cnu.ac.kr"
+LOG_DIR = HERE / "logs"                          # 실행 1회 = 파일 1개, 도구 호출 1건 = JSON 1줄 (결과 전문)
 
 # MCP 서버 실행 명령: Claude Desktop 설정과 같은 명령을 쓴다.
 # (서버는 자기 .venv에 cryptography/httpx가 있어서 uv run --directory 로 띄워야 한다)
@@ -105,7 +107,20 @@ async def run_bua(name: str, args: dict):
     }
 
 
+def logger(task: str):
+    """logs/run-<시각>.jsonl 에 한 줄씩 덧붙이는 함수를 돌려준다. 터미널 출력은 200자로 자르지만 파일엔 전부 남긴다."""
+    LOG_DIR.mkdir(exist_ok=True)
+    path = LOG_DIR / f"run-{time.strftime('%Y%m%d-%H%M%S')}.jsonl"
+    def log(**row):
+        with open(path, "a", encoding="utf-8") as f:
+            f.write(json.dumps({"ts": time.strftime("%H:%M:%S"), **row}, ensure_ascii=False) + "\n")
+    log(event="start", task=task)
+    print("LOG:", path)
+    return log
+
+
 async def main(task: str) -> None:
+    log = logger(task)
     async with Client(transport) as mcp:
         # ---- TOOLS: list_tools() 결과 3개 + 손으로 쓴 1개 ----
         mcp_tools = await mcp.list_tools()
@@ -140,6 +155,7 @@ async def main(task: str) -> None:
                 print(f"총 스텝: {step}")
                 tokens += interaction.usage.total_tokens
                 print(f"총 토큰 사용량: {tokens}")
+                log(event="end", steps=step, tokens=tokens, answer=interaction.output_text)
                 break
             results = []
             for c in calls:
@@ -154,6 +170,7 @@ async def main(task: str) -> None:
                     "result": [{"type": "text", "text": json.dumps(result, ensure_ascii=False)}],
                 })
                 print(f"STEP {step} / {c.name} {c.arguments} / {json.dumps(result, ensure_ascii=False)[:200]}")
+                log(event="tool", step=step, name=c.name, args=c.arguments, result=result)
             tokens += interaction.usage.total_tokens
             interaction = client.interactions.create(
                 model=MODEL,
@@ -165,6 +182,7 @@ async def main(task: str) -> None:
             print("STEP_LIMIT")
             print(f"총 스텝: {step}")
             print(f"총 토큰 사용량: {tokens}")
+            log(event="step_limit", steps=step, tokens=tokens)
 
 
 if __name__ == "__main__":
