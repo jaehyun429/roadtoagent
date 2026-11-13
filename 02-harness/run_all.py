@@ -42,13 +42,17 @@ def judge(client: anthropic.Anthropic, task: dict, answer: str | None, browser_c
         "수치나 제목은 기대 결과와 같아야 한다. 추정이나 '확인하지 못함'은 불충족이다.\n\n"
         f"[태스크] {task['text']}\n[기대 결과] {task['expected']}\n[browser_calls] {browser_calls}\n[최종 답]\n{answer}"
     )
+    # max_tokens에는 모델의 생각(thinking)도 포함된다. 512로 두니 생각만 하다 JSON이 잘렸다(JSONDecodeError). 넉넉히 주고 effort는 낮춘다.
     r = client.messages.create(
-        model=JUDGE_MODEL, max_tokens=512,
-        output_config={"format": {"type": "json_schema", "schema": JUDGE_SCHEMA}},
+        model=JUDGE_MODEL, max_tokens=4096,
+        output_config={"effort": "low", "format": {"type": "json_schema", "schema": JUDGE_SCHEMA}},
         messages=[{"role": "user", "content": prompt}],
     )
+    jtok = r.usage.input_tokens + r.usage.output_tokens
+    if r.stop_reason != "end_turn":                  # 잘렸거나 거절이면 판정 보류: 사람이 채운다
+        return False, f"판정 실패 (stop_reason={r.stop_reason}) — 수동 판정 필요", jtok
     data = json.loads(next(b.text for b in r.content if b.type == "text"))
-    return bool(data["success"]), data["reason"], r.usage.input_tokens + r.usage.output_tokens
+    return bool(data["success"]), data["reason"], jtok
 
 
 def select(nums: set[int] | None, which: str) -> list[dict]:
@@ -60,7 +64,9 @@ def select(nums: set[int] | None, which: str) -> list[dict]:
     return rows
 
 
-def main() -> None:
+async def main() -> None:
+    # 태스크마다 asyncio.run()을 따로 돌리면 두 번째부터 "Event loop is closed"로 MCP 연결이 실패한다
+    # (harness의 transport 객체가 첫 이벤트 루프에 묶임). 그래서 전체를 하나의 루프 안에서 await 한다.
     ap = argparse.ArgumentParser()
     ap.add_argument("--tasks", help="예: 2,4,10")
     ap.add_argument("--set", choices=["base", "variation", "both"], default="both")
@@ -73,7 +79,7 @@ def main() -> None:
     for t in rows:
         tag = f"{t['task_num']}{'v' if t['variation'] else ''}"
         print(f"\n===== task {tag}: {t['text']}", file=sys.stderr)
-        s = asyncio.run(harness.main(t["text"]))
+        s = await harness.main(t["text"])
         success, reason, jtok = judge(client, t, s["answer"], s["browser_calls"])
         row = {
             "task_num": t["task_num"], "variation": t["variation"], "date": time.strftime("%Y-%m-%d"),
@@ -91,4 +97,4 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())

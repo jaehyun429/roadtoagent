@@ -251,7 +251,6 @@ def login() -> str:
         doc = r.json()
     except ValueError:
         raise SourceError(ERR_LOGIN_FAILED)
-    print(doc, file=sys.stderr)   # 임시: 실제 응답 확인용. 확인 후 삭제
     if doc.get("header", {}).get("code") != 200:
         raise SourceError(ERR_LOGIN_FAILED)
     ret_code = str((doc.get("body") or {}).get("ret_code"))
