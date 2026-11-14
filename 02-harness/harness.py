@@ -10,6 +10,7 @@ while 루프(스텝 제한, 도구 호출, 결과 되돌려주기)는 그대로.
 
 실행:  uv run harness.py                     # tasks.md 1번
        uv run harness.py "딥러닝 과목 출석률 알려줘"
+       uv run harness.py --resume logs/paused-<시각>.json   # SESSION_EXPIRED/LOGIN_FAILED 로 멈춘 실행 재개 (design.md 3번)
 """
 import asyncio
 import json
@@ -36,6 +37,10 @@ BUA_MAX_CALLS = 4                                # 태스크 1개당 browser_fal
 SERVER_DIR = (HERE / ".." / "01-mcp-server").resolve()
 CAMPUS_HOME = "https://dcs-lcms.cnu.ac.kr"
 LOG_DIR = HERE / "logs"                          # 실행 1회 = 파일 1개, 도구 호출 1건 = JSON 1줄 (결과 전문)
+# 사용자 조치가 필요한 에러: 여기서 멈추고 상태를 저장한다 (design.md 3번). 자동 로그인이 생긴 뒤로는
+# SESSION_EXPIRED가 거의 안 나고, 대신 비밀번호 오류·사이트 점검 때 LOGIN_FAILED가 같은 자리에 온다.
+PAUSE_ERRORS = {"SESSION_EXPIRED", "LOGIN_FAILED"}
+RESUME_MESSAGE = "쿠키(로그인)가 갱신되었습니다. 방금 실패한 도구를 같은 인자로 다시 호출하세요."
 
 # MCP 서버 실행 명령: Claude Desktop 설정과 같은 명령을 쓴다.
 # (서버는 자기 .venv에 cryptography/httpx가 있어서 uv run --directory 로 띄워야 한다)
@@ -111,6 +116,17 @@ async def run_bua(name: str, args: dict):
     }
 
 
+def jsonable(messages: list) -> list:
+    """messages를 JSON으로 저장할 수 있게. assistant 턴의 블록은 SDK 객체라 dict로 바꾼다 (재개 때 dict 그대로 API에 보내도 된다)."""
+    out = []
+    for m in messages:
+        content = m["content"]
+        if isinstance(content, list):
+            content = [b if isinstance(b, dict) else b.model_dump(exclude_none=True) for b in content]
+        out.append({"role": m["role"], "content": content})
+    return out
+
+
 def logger(task: str):
     """logs/run-<시각>.jsonl 에 한 줄씩 덧붙이는 함수를 돌려준다. 터미널 출력은 200자로 자르지만 파일엔 전부 남긴다."""
     LOG_DIR.mkdir(exist_ok=True)
@@ -123,10 +139,11 @@ def logger(task: str):
     return log
 
 
-async def main(task: str, browser_only: bool = False) -> dict:
+async def main(task: str, browser_only: bool = False, state: dict | None = None) -> dict:
     """태스크 1개 실행. results.jsonl 한 줄을 만들 재료(바깥 층 + 안쪽 층 합계)를 dict로 돌려준다.
     browser_only: TODO 4 비교 실험용. 루프는 그대로 두고 모델에 주는 도구를 browser_fallback 하나로 줄여
-    도구로 풀던 태스크를 브라우저 경로로 강제한다 (같은 일을 두 경로로 한 비용 비교)."""
+    도구로 풀던 태스크를 브라우저 경로로 강제한다 (같은 일을 두 경로로 한 비용 비교).
+    state: --resume 로 읽은 저장 상태. 있으면 스텝·토큰·messages를 이어받고 모델에 RESUME_MESSAGE를 붙여 계속한다."""
     log = logger(task)
     started = time.time()                                    # 소요 시간: 명령 입력 ~ 최종 답 (design.md 4번)
     inner = {"browser_calls": 0, "browser_steps": 0, "browser_tokens": 0, "browser_sec": 0.0}   # 안쪽 층 합계
@@ -172,6 +189,16 @@ async def main(task: str, browser_only: bool = False) -> dict:
         # ---- 아래는 과제 00 루프. 모델 호출 두 줄과 messages 쌓기만 Anthropic 식으로 바뀜 ----
         client = anthropic.Anthropic()                           # ANTHROPIC_API_KEY 를 환경에서 읽는다
         messages = [{"role": "user", "content": task}]           # 첫 호출엔 태스크 하나
+        elapsed_before = 0.0                                      # 멈추기 전까지 쓴 시간 (재개 후 합산)
+        if state:                                                 # ---- 재개: 저장해 둔 상태를 그대로 이어받는다 ----
+            messages = state["messages"]
+            inner.update(state["inner"])
+            elapsed_before = state["elapsed_sec"]
+            # 마지막 user 턴(실패한 tool_result)에 "다시 부르라"는 문장을 덧붙인다. 별도 턴으로 넣지 않는 이유:
+            # tool_result 뒤에 바로 같은 role이 또 오면 안 되고, 한 턴 안의 블록 추가는 허용된다.
+            messages[-1]["content"].append({"type": "text", "text": RESUME_MESSAGE})
+            log(event="resume", step=state["step"], tokens=state["tokens"], paused_file=state["file"])
+            print(f"RESUME: step {state['step']} 부터, 누적 토큰 {state['tokens']}, 저장 파일 {state['file']}")
 
         def ask():
             # 안전 분류기가 거절(stop_reason=refusal)하면 서버가 다른 모델로 같은 요청을 이어 돌리는 옵션(fallbacks).
@@ -181,11 +208,22 @@ async def main(task: str, browser_only: bool = False) -> dict:
             )
 
         def summary(answer, stop):
-            return {"steps": step, "tokens": tokens, "elapsed_sec": round(time.time() - started, 1),
+            return {"steps": step, "tokens": tokens, "elapsed_sec": round(elapsed_before + time.time() - started, 1),
                     "answer": answer, "stop": stop, **inner, "browser_sec": round(inner["browser_sec"], 1)}
 
-        tokens = 0
-        step = 0
+        tokens = state["tokens"] if state else 0
+        step = state["step"] if state else 0
+
+        def pause(step: int, failed: dict) -> str:
+            """상태 저장: 몇 번째 스텝, 어떤 태스크, 지금까지의 messages 전체, 토큰 누적량 (design.md 3번) + 안쪽 층 합계와 시간."""
+            path = LOG_DIR / f"paused-{time.strftime('%Y%m%d-%H%M%S')}.json"
+            saved = {"task": task, "step": step, "tokens": tokens, "inner": inner,
+                     "elapsed_sec": round(elapsed_before + time.time() - started, 1),
+                     "failed": failed, "browser_only": browser_only,
+                     "messages": jsonable(messages)}
+            path.write_text(json.dumps(saved, ensure_ascii=False, indent=1), encoding="utf-8")
+            return str(path)
+
         while step < MAX_STEPS:
             step += 1
             try:
@@ -218,6 +256,17 @@ async def main(task: str, browser_only: bool = False) -> dict:
                 print(f"STEP {step} / {c.name} {c.input} / {json.dumps(result, ensure_ascii=False)[:200]}")
                 log(event="tool", step=step, name=c.name, args=c.input, result=result)
             messages.append({"role": "user", "content": results})                 # 도구 결과를 이력에 → 다음 호출 때 전부 다시 보냄
+            # ---- 사용자 조치가 필요한 에러면 여기서 멈춘다. 모델에게 돌려보내 봐야 할 수 있는 게 없다 ----
+            failed = next(({"tool": c.name, "args": c.input, "error": r["error"], "message": r.get("message")}
+                           for c, r in zip(calls, [json.loads(x["content"]) for x in results])
+                           if isinstance(r, dict) and r.get("error") in PAUSE_ERRORS), None)
+            if failed:
+                path = pause(step, failed)
+                log(event="paused", step=step, tokens=tokens, failed=failed, file=path)
+                print(f"PAUSED: {failed['error']} — {failed['message']}")
+                print(f"상태 저장: {path}")
+                print(f"조치 후 재개: uv run harness.py --resume {path}")
+                return summary(None, "paused")
         else:
             print("STEP_LIMIT")
             print(f"총 스텝: {step}")
@@ -227,6 +276,15 @@ async def main(task: str, browser_only: bool = False) -> dict:
 
 
 if __name__ == "__main__":
-    # 기본값 = tasks.md 1번
-    task = sys.argv[1] if len(sys.argv) > 1 else "딥러닝 공지사항에 기말고사 관련 공지 올라왔어?"
-    asyncio.run(main(task))
+    import argparse
+    ap = argparse.ArgumentParser()
+    ap.add_argument("task", nargs="?", default="딥러닝 공지사항에 기말고사 관련 공지 올라왔어?")   # 기본값 = tasks.md 1번
+    ap.add_argument("--browser-only", action="store_true")
+    ap.add_argument("--resume", metavar="PAUSED_JSON", help="PAUSED 로 멈춘 실행을 저장 파일에서 이어서 돌린다")
+    a = ap.parse_args()
+    if a.resume:
+        st = json.loads(pathlib.Path(a.resume).read_text(encoding="utf-8"))
+        st["file"] = a.resume
+        asyncio.run(main(st["task"], browser_only=st.get("browser_only", False), state=st))
+    else:
+        asyncio.run(main(a.task, browser_only=a.browser_only))
