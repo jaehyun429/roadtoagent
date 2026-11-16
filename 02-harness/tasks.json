@@ -38,7 +38,7 @@
   "task_num": 6,
   "variation": false,
   "text": "이번학기 수강 과목 뭐 있는지 알려줘",
-  "expected": "범죄의진실과오해, 직업과 진로, 딥러닝, 종합설계1 네 개 전부",
+  "expected": "범죄의진실과오해, 직업과 진로, 딥러닝, 종합설계1 네 개 전부 (도구가 주는 학기 = .env의 CAMPUS_TERM 2026-1학기 기준)",
   "expected_channel": "tool"
  },
  {
@@ -59,7 +59,7 @@
   "task_num": 9,
   "variation": false,
   "text": "알고리즘 과목 가장 최근 공지사항 확인해줘",
-  "expected": "\"이번 학기 과목에 없음\" 류 응답 + 브라우저 호출 로그 없음",
+  "expected": "\"조회 학기(2026-1학기) 과목에 없음\" 류 응답 + 브라우저 호출 로그 없음",
   "expected_channel": "tool"
  },
  {
@@ -108,7 +108,7 @@
   "task_num": 6,
   "variation": true,
   "text": "수강 과목 뭐 있는지 알려줘",
-  "expected": "범죄의진실과오해, 직업과 진로, 딥러닝, 종합설계1 네 개 전부",
+  "expected": "범죄의진실과오해, 직업과 진로, 딥러닝, 종합설계1 네 개 전부 (도구가 주는 학기 = .env의 CAMPUS_TERM 2026-1학기 기준)",
   "expected_channel": "tool"
  },
  {
@@ -129,7 +129,7 @@
   "task_num": 9,
   "variation": true,
   "text": "알고리즘 최신 공지사항 확인해줘",
-  "expected": "\"이번 학기 과목에 없음\" 류 응답 + 브라우저 호출 로그 없음",
+  "expected": "\"조회 학기(2026-1학기) 과목에 없음\" 류 응답 + 브라우저 호출 로그 없음",
   "expected_channel": "tool"
  },
  {
