@@ -53,5 +53,22 @@
       ],
       "type": "object"
     }
+  },
+  {
+    "name": "get_syllabus",
+    "description": "특정 과목의 강의계획서에서 평가 비율(항목별 %)과 절대/상대평가 여부를 돌려준다.",
+    "inputSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "course": {
+          "description": "과목명 일부 또는 전체 (부분일치)",
+          "type": "string"
+        }
+      },
+      "required": [
+        "course"
+      ],
+      "type": "object"
+    }
   }
 ]

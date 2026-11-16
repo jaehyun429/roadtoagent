@@ -18,6 +18,7 @@ import json
 import os
 import sys
 import time
+import uuid
 from datetime import date
 from pathlib import Path
 from typing import Annotated
@@ -89,6 +90,24 @@ API_NOTICES = {
         "offset": 0, "limit": "{limit}",
     },
 }
+
+# 강의계획서 링크. 사이버캠퍼스 자체 계획서(plan_info)는 비어 있고, body.link_course_info.link_url 이
+# 학사 사이트(cnuit)의 계획서 페이지로 가는 링크다. 과목 객체를 그대로 실어 보내는 점은 과제·공지와 같다.
+API_COURSE_PLAN = {
+    "path": "/api/v1/coursePlan/getInfo",
+    "payload": {**COURSE_FIELDS, "group_cd": "{group_cd}"},
+}
+# cnuit(학사 사이트)는 별도 시스템. 링크의 p0~p7을 폼으로 넘기면 프레임 페이지가 뜨고, 실제 데이터는
+# 그 안의 JS가 serviceController.do 로 받아온다. 그 호출을 서버가 흉내낸다 (아래 cnuit_* 함수).
+CNUIT_URL = "https://cnuit.cnu.ac.kr"
+CNUIT_SERVICE = "/patis/system/serviceController.do"
+# 평가 항목 컬럼 → 응답 키. 컬럼명은 계획서 화면 JS(uls_3050604_p01_t06)의 데이터셋 정의에서 확인.
+SYLLABUS_RATIO_COLUMNS = {
+    "EVL_MTHD_MEXM": "midterm", "EVL_MTHD_FLEXM": "final", "EVL_MTHD_QUIZ": "quiz",
+    "EVL_MTHD_ATT": "attendance", "EVL_MTHD_PRJT": "assignment", "EVL_MTHD_PORT": "portfolio",
+    "EVL_MTHD_PART": "participation", "EVL_MTHD_ETC": "etc",
+}
+
 
 def current_term() -> tuple[str, str]:
     """조회할 학기. 모델이 정하지 않고 서버가 정한다.
@@ -328,7 +347,8 @@ def _fetch_once(api: dict, **vars) -> dict:
 def parse_courses(body: dict) -> list[dict]:
     """body.course_list -> 내부용 과목 dict. class_no, term_*는 과제·공지 API payload를 만들 때 쓴다."""
     keys = ["class_no", "course_id", "course_nm", "term_cd", "term_cd_nm", "term_year", "subject_cd",
-            "attendance_standard", "offline_ag_use_yn", "individual_ag_use_yn", "ocw_yn", "auditor_course_use_yn"]
+            "attendance_standard", "offline_ag_use_yn", "individual_ag_use_yn", "ocw_yn", "auditor_course_use_yn",
+            "group_cd"]   # group_cd 는 강의계획서 링크 요청(API_COURSE_PLAN)에만 쓴다
     return [
         {"name": c["course_nm"], "professor": c["prof_nm"], **{k: c.get(k) for k in keys}}
         for c in body["course_list"]
@@ -385,6 +405,113 @@ def load(api: dict, parser, **vars):
     except SourceError:
         raise
     except Exception:
+        raise SourceError(ERR_PARSING_FAILED)
+
+
+# ------------------------------------------------------------ cnuit 계획서 ---
+def patis_encrypt(data: str, key: str) -> str:
+    """cnuit JS(PatisUtils.encryptDataForAES)와 같은 결과. 키 앞 16글자를 AES-128-CBC 키이자 IV로 쓴다."""
+    k = key.replace("-", "")[:16].encode()
+    padder = padding.PKCS7(128).padder()
+    buf = padder.update(data.encode("utf-8")) + padder.finalize()
+    enc = Cipher(algorithms.AES(k), modes.CBC(k)).encryptor()
+    return base64.b64encode(enc.update(buf) + enc.finalize()).decode()
+
+
+def cnuit_open(client: httpx.Client, link_url: str) -> dict:
+    """계획서 링크를 따라가 cnuit 세션(쿠키는 client 안)과 프레임 초기값(p1~p7, 세션키, 메뉴코드)을 얻는다."""
+    try:
+        r1 = client.get(link_url)                       # checkMenu.jsp: 자동 제출되는 숨은 폼 한 장
+        form = dict(re.findall(r'name="([^"]+)" value="([^"]*)"', r1.text))
+        action = re.search(r'action="([^"]+)"', r1.text)
+        if not form or not action:
+            raise SourceError(ERR_PARSING_FAILED)
+        r2 = client.post(CNUIT_URL + action.group(1), data=form)   # 프레임 페이지
+        init = re.search(r"initParameter\((\{.*?\})\);", r2.text)
+        if not init:
+            raise SourceError(ERR_PARSING_FAILED)
+        return json.loads(init.group(1))
+    except (httpx.TimeoutException, httpx.ConnectError, httpx.NetworkError):
+        raise SourceError(ERR_SERVER_NOT_RESPONDING)
+
+
+def cnuit_call(client: httpx.Client, init: dict, service: str, method: str, params: dict) -> dict:
+    """cnuit 의 PatisTransaction 1회. 파라미터는 이름·값을 각각 암호화해 FRAMEWORKLOG_PARAMn/VALUEn 으로 보낸다.
+
+    0번(트랜잭션 ID)은 세션키로, 나머지는 그 트랜잭션 ID로 암호화한다 — 사이트 JS(setSubmissionParameters)와 동일.
+    """
+    tid = uuid.uuid4().hex
+    session_key = init["gv_sessionUser"]
+    all_params = {
+        "FRAMEWORK_SERVICE_NAME": service, "FRAMEWORK_METHOD_NAME": method, "FRAMEWORK_LANGUAGE_GB": "ko",
+        "FRAMEWORK_TRANSACTION_ID": tid, "FRAMEWORKLOG_PROTOCOL": "JSON", "FRAMEWORK_SESSION_USER": session_key,
+        "FRAMEWORK_FRAME_GB": "3", "FRAMEWORK_FRAME_INFO": "outlink", "FRAMEWORK_MENU_CD": init["MENU_CD"],
+        **params,
+    }
+    fields = {"_JSONREQUESTOBJ_": "{}"}          # 보내는 데이터셋 없음
+    no = 1                                       # 0번은 트랜잭션 ID 전용, 나머지는 1번부터
+    for k, v in all_params.items():
+        if k == "FRAMEWORK_TRANSACTION_ID":
+            fields["FRAMEWORKLOG_PARAM0"] = patis_encrypt(k, session_key)
+            fields["FRAMEWORKLOG_VALUE0"] = patis_encrypt(v, session_key)
+            continue
+        fields[f"FRAMEWORKLOG_PARAM{no}"] = patis_encrypt(k, tid)
+        fields[f"FRAMEWORKLOG_VALUE{no}"] = patis_encrypt("" if v is None else str(v), tid)
+        no += 1
+    try:
+        r = client.post(f"{CNUIT_URL}{CNUIT_SERVICE}?GB={service}_{method}",
+                        files={k: (None, v) for k, v in fields.items()})   # multipart/form-data
+    except (httpx.TimeoutException, httpx.ConnectError, httpx.NetworkError):
+        raise SourceError(ERR_SERVER_NOT_RESPONDING)
+    if r.status_code >= 500:
+        raise SourceError(ERR_SERVER_NOT_RESPONDING)
+    try:
+        doc = r.json()
+    except ValueError:
+        raise SourceError(ERR_PARSING_FAILED)
+    if not isinstance(doc, dict):
+        raise SourceError(ERR_PARSING_FAILED)
+    return doc
+
+
+def parse_syllabus(course_row: dict, plan_row: dict) -> dict:
+    """두 응답에서 설계한 필드만 꺼낸다. (응답에는 교수 전화번호·이메일 컬럼이 같이 오므로 절대 통째로 넘기지 않는다)"""
+    grading = course_row.get("CURVE_DIV_CD_NM")            # "상대평가" / "절대평가"
+    if grading not in ("상대평가", "절대평가"):
+        raise SourceError(ERR_PARSING_FAILED)
+    ratios = {}
+    for col, key in SYLLABUS_RATIO_COLUMNS.items():
+        v = plan_row.get(col)
+        ratios[key] = 0 if v in (None, "") else int(v)      # 비어 있으면 0% 로 본다
+    return {"course": course_row.get("SBJT_NM"), "grading": grading, "ratios": ratios}
+
+
+def load_syllabus(c: dict) -> dict:
+    """과목 1개의 강의계획서 평가 정보. 사이버캠퍼스(링크) → cnuit(목록 → 계획서 본문) 세 단계."""
+    link = fetch_json(API_COURSE_PLAN, **c).get("link_course_info", {}).get("link_url")
+    if not link:
+        raise SourceError(ERR_PARSING_FAILED)
+    with httpx.Client(follow_redirects=True, timeout=TIMEOUT_SEC) as client:
+        init = cnuit_open(client, link)
+        # 1) 강좌 목록 조회: 계획서 본문 조회에 필요한 LT_STAFF_NO, GENRL_LT_PDOC_TYPE_CD 와 절대/상대평가가 여기 있다
+        rows = cnuit_call(client, init, "Uls0605Service", "selectList", {
+            "OPEN_YR": init.get("p1"), "OPEN_SHTM_CD": init.get("p2"), "OPEN_ORGN_CLSF_CD": init.get("p3"),
+            "OPEN_SUST_MJ_CD": init.get("p4"), "SBJT_NM": init.get("p5"), "OPEN_DCLSS": init.get("p6"),
+            "STAFF_NM": init.get("p7"),
+        }).get("ds_out") or []
+        if not rows:
+            raise SourceError(ERR_PARSING_FAILED)
+        course_row = rows[0]
+        # 2) 계획서 본문(한글 탭): 평가 항목별 비율
+        plan_rows = cnuit_call(client, init, "Uls0604Service", "selectTab01List", {
+            k: course_row.get(k) for k in ["OPEN_YR", "OPEN_SHTM_CD", "OPEN_ORGN_CLSF_CD", "OPEN_SUST_MJ_CD",
+                                            "OPEN_SBJT_NO", "OPEN_DCLSS", "GENRL_LT_PDOC_TYPE_CD", "LT_STAFF_NO"]
+        }).get("ds_out01") or []
+        if not plan_rows:
+            raise SourceError(ERR_PARSING_FAILED)
+    try:
+        return parse_syllabus(course_row, plan_rows[0])
+    except (ValueError, TypeError, AttributeError):
         raise SourceError(ERR_PARSING_FAILED)
 
 
@@ -453,6 +580,21 @@ def get_notices(
     except SourceError as e:
         return e.response
     return ok(items, total)
+
+
+@mcp.tool()
+def get_syllabus(
+    course: Annotated[str, Field(description="과목명 일부 또는 전체 (부분일치)")],
+) -> dict:
+    """특정 과목의 강의계획서에서 평가 비율(항목별 %)과 절대/상대평가 여부를 돌려준다."""
+    try:
+        c = find_course(course)
+        if c is None:
+            return err_course_not_found(course)
+        item = cached(f"syllabus:{c['course_id']}", lambda: load_syllabus(c))
+    except SourceError as e:
+        return e.response
+    return ok([item])
 
 
 # ------------------------------------------------------------------ main ---
