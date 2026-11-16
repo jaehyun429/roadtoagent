@@ -4,6 +4,7 @@
   uv run run_all.py                 # 20개 전부 (기본 10 + 변형 10)
   uv run run_all.py --tasks 2,4     # 번호 골라서 (기본·변형 둘 다)
   uv run run_all.py --tasks 2 --set base      # base | variation | both(기본값)
+  uv run run_all.py --repeat 3 --out results-x3.jsonl   # 전체를 3회 반복, 줄마다 run 번호(1~3) 기록
 
 한 줄 = 바깥 층(steps, tokens, elapsed_sec) + 안쪽 층 합계(browser_*) + 판정(success, judge_reason).
 판정은 실행 모델과 다른 모델(JUDGE_MODEL)이 tasks.md 기대 결과와 대조해서 내린다. 판정 토큰은 하네스 비용에 섞지 않는다.
@@ -80,20 +81,23 @@ async def main() -> None:
     # 설정을 바꾼 뒤 일부만 다시 돌릴 때 원래 results.jsonl 을 덮지 않고 다른 파일에 쓰기 위한 옵션
     ap.add_argument("--out", default=str(RESULTS), help="결과 파일 (기본 results.jsonl)")
     ap.add_argument("--browser-only", action="store_true", help="TODO 4: 도구 없이 browser_fallback 만 주고 돌린다")
+    # Phase 3-3: 같은 태스크를 여러 번 돌려 성공률·편차를 본다. 한 파일에 쓰고 줄마다 run 번호로 구분한다.
+    ap.add_argument("--repeat", type=int, default=1, help="전체 목록을 몇 번 반복할지 (기본 1)")
     a = ap.parse_args()
     out = HERE / a.out
     nums = {int(x) for x in a.tasks.split(",")} if a.tasks else None
     rows = select(nums, a.set)
     client = anthropic.Anthropic()
-    print(f"{len(rows)}개 실행 → {out}", file=sys.stderr)
+    print(f"{len(rows)}개 × {a.repeat}회 실행 → {out}", file=sys.stderr)
 
-    for t in rows:
+    # 1회차 전체 → 2회차 전체 순서. 한 회차가 곧 표본 하나라서, 중간에 멈춰도 완성된 회차만 세면 된다.
+    for run, t in ((r, t) for r in range(1, a.repeat + 1) for t in rows):
         tag = f"{t['task_num']}{'v' if t['variation'] else ''}"
-        print(f"\n===== task {tag}: {t['text']}", file=sys.stderr)
+        print(f"\n===== run {run} task {tag}: {t['text']}", file=sys.stderr)
         s = await harness.main(t["text"], browser_only=a.browser_only)
         success, reason, jtok = judge(client, t, s["answer"], s["browser_calls"], browser_only=a.browser_only)
         row = {
-            "task_num": t["task_num"], "variation": t["variation"], "date": time.strftime("%Y-%m-%d"),
+            "run": run, "task_num": t["task_num"], "variation": t["variation"], "date": time.strftime("%Y-%m-%d"),
             "model": harness.MODEL, "success": success,
             "channel": "browser" if s["browser_calls"] > 0 else "tool",      # design.md 4번: browser_fallback이 한 번이라도 불렸나
             "steps": s["steps"], "tokens": s["tokens"], "elapsed_sec": s["elapsed_sec"],
@@ -103,7 +107,7 @@ async def main() -> None:
         }
         with open(out, "a", encoding="utf-8") as f:
             f.write(json.dumps(row, ensure_ascii=False) + "\n")
-        print(f"RESULT {tag}: success={success} channel={row['channel']} steps={row['steps']} tokens={row['tokens']} "
+        print(f"RESULT r{run} {tag}: success={success} channel={row['channel']} steps={row['steps']} tokens={row['tokens']} "
               f"browser={row['browser_calls']}/{row['browser_steps']}/{row['browser_tokens']} | {reason}", file=sys.stderr)
 
 
